@@ -12,7 +12,11 @@ DEFAULT_PORT = 8080
 
 def load_response():
     with open(RESPONSE_FILE, "rb") as f:
-        return f.read()
+        data = f.read()
+    # Normalize line endings to \r\n as required by the HTTP RFC.
+    # Replace existing \r\n first to avoid doubling, then convert bare \n.
+    data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    return data
 
 
 def log_request(log_file, addr, request_data):
