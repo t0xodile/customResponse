@@ -29,27 +29,45 @@ def log_request(log_file, addr, request_data):
         f.write("\n")
 
 
-def extract_origin(request_data):
+def parse_request(request_data):
+    """Return (method, headers_dict_lowercased)."""
     try:
-        text = request_data.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1")
+        head = request_data.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1")
     except Exception:
-        return None
-    for line in text.split("\r\n")[1:]:
+        return None, {}
+    lines = head.split("\r\n")
+    method = lines[0].split(" ", 1)[0] if lines else None
+    headers = {}
+    for line in lines[1:]:
         name, sep, value = line.partition(":")
-        if sep and name.strip().lower() == "origin":
-            return value.strip()
-    return None
+        if sep:
+            headers[name.strip().lower()] = value.strip()
+    return method, headers
 
 
-def inject_cors_headers(raw, origin):
+def inject_cors_headers(raw, method, headers):
     sep = b"\r\n\r\n"
     idx = raw.find(sep)
     if idx == -1:
         return raw
-    extra = (
-        f"Access-Control-Allow-Origin: {origin}\r\n"
-        "Access-Control-Allow-Credentials: true\r\n"
-    ).encode("iso-8859-1")
+
+    origin = headers.get("origin", "*")
+    req_method = headers.get("access-control-request-method")
+    req_headers = headers.get("access-control-request-headers")
+
+    extra_lines = [
+        f"Access-Control-Allow-Origin: {origin}",
+        "Access-Control-Allow-Credentials: true",
+        f"Access-Control-Allow-Methods: {req_method}" if req_method
+            else "Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
+    ]
+    if req_headers:
+        extra_lines.append(f"Access-Control-Allow-Headers: {req_headers}")
+    extra_lines.append("Access-Control-Max-Age: 86400")
+    # Tell caches the response varies by these request headers.
+    extra_lines.append("Vary: Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
+
+    extra = ("\r\n".join(extra_lines) + "\r\n").encode("iso-8859-1")
     return raw[:idx] + b"\r\n" + extra.rstrip(b"\r\n") + raw[idx:]
 
 
@@ -74,9 +92,8 @@ def serve(port, log_file=None, cors_reflect=False):
                     log_request(log_file, addr, request_data)
                 raw = load_response()
                 if cors_reflect:
-                    origin = extract_origin(request_data)
-                    if origin:
-                        raw = inject_cors_headers(raw, origin)
+                    method, headers = parse_request(request_data)
+                    raw = inject_cors_headers(raw, method, headers)
                 conn.sendall(raw)
             except Exception as e:
                 print(f"[error] {addr}: {e}")
