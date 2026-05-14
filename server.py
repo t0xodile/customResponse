@@ -29,7 +29,31 @@ def log_request(log_file, addr, request_data):
         f.write("\n")
 
 
-def serve(port, log_file=None):
+def extract_origin(request_data):
+    try:
+        text = request_data.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1")
+    except Exception:
+        return None
+    for line in text.split("\r\n")[1:]:
+        name, sep, value = line.partition(":")
+        if sep and name.strip().lower() == "origin":
+            return value.strip()
+    return None
+
+
+def inject_cors_headers(raw, origin):
+    sep = b"\r\n\r\n"
+    idx = raw.find(sep)
+    if idx == -1:
+        return raw
+    extra = (
+        f"Access-Control-Allow-Origin: {origin}\r\n"
+        "Access-Control-Allow-Credentials: true\r\n"
+    ).encode("iso-8859-1")
+    return raw[:idx] + b"\r\n" + extra.rstrip(b"\r\n") + raw[idx:]
+
+
+def serve(port, log_file=None, cors_reflect=False):
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", port))
@@ -49,6 +73,10 @@ def serve(port, log_file=None):
                 if log_file:
                     log_request(log_file, addr, request_data)
                 raw = load_response()
+                if cors_reflect:
+                    origin = extract_origin(request_data)
+                    if origin:
+                        raw = inject_cors_headers(raw, origin)
                 conn.sendall(raw)
             except Exception as e:
                 print(f"[error] {addr}: {e}")
@@ -65,5 +93,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="HTTP server that replies with response.txt")
     parser.add_argument("port", nargs="?", type=int, default=DEFAULT_PORT, help="port to listen on")
     parser.add_argument("--log", metavar="FILE", help="log received requests to FILE")
+    parser.add_argument(
+        "--cors-reflect",
+        action="store_true",
+        help="reflect the request's Origin header into Access-Control-Allow-Origin "
+             "and add Access-Control-Allow-Credentials: true",
+    )
     args = parser.parse_args()
-    serve(args.port, log_file=args.log)
+    serve(args.port, log_file=args.log, cors_reflect=args.cors_reflect)
